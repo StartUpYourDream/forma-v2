@@ -1,20 +1,15 @@
-import { useEffect, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import Sidebar from './components/Sidebar'
-import Chat from './components/Chat'
-import MemberPanel from './components/MemberPanel'
-import FileBrowser from './components/FileBrowser'
-import Login from './pages/Login'
-import Register from './pages/Register'
-import { useStore } from './store'
+import { useEffect, useState } from "react";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import Sidebar from "./components/Sidebar";
+import Chat from "./components/Chat";
+import MemberPanel from "./components/MemberPanel";
+import FileBrowser from "./components/FileBrowser";
+import Login from "./pages/Login";
+import Register from "./pages/Register";
+import { useStore } from "./store";
 
-// 主应用布局
 function MainLayout() {
-  const {
-    currentProject,
-    showFileBrowser,
-    setShowFileBrowser
-  } = useStore()
+  const { currentProject, showFileBrowser, setShowFileBrowser } = useStore();
 
   return (
     <div className="h-screen flex bg-white">
@@ -32,73 +27,46 @@ function MainLayout() {
         />
       )}
     </div>
-  )
+  );
 }
 
-// 路由保护组件
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { token, isAuthenticated } = useStore()
-  const [checking, setChecking] = useState(true)
-  const [valid, setValid] = useState(false)
+  const { isAuthenticated } = useStore();
 
-  useEffect(() => {
-    // 检查本地存储的 token
-    const storedToken = localStorage.getItem('forma_token')
-    if (storedToken && !token) {
-      // 恢复 token 到 store
-      useStore.setState({ token: storedToken, isAuthenticated: true })
-      setValid(true)
-    } else if (isAuthenticated && token) {
-      setValid(true)
-    }
-    setChecking(false)
-  }, [token, isAuthenticated])
-
-  if (checking) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-gray-100">
-        <div className="text-gray-500">加载中...⏳</div>
-      </div>
-    )
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
   }
 
-  if (!valid) {
-    return <Navigate to="/login" replace />
-  }
-
-  return <>{children}</>
+  return <>{children}</>;
 }
 
-// 公开路由（已登录用户自动跳转）
 function PublicRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useStore()
-  const storedToken = localStorage.getItem('forma_token')
+  const { isAuthenticated } = useStore();
 
-  if (isAuthenticated || storedToken) {
-    return <Navigate to="/" replace />
+  if (isAuthenticated) {
+    return <Navigate to="/" replace />;
   }
 
-  return <>{children}</>
+  return <>{children}</>;
 }
 
-// 应用初始化组件
 function AppInitializer({ children }: { children: React.ReactNode }) {
-  const { initAuth, isAuthenticated } = useStore()
-  const [initialized, setInitialized] = useState(false)
+  const { initAuth } = useStore();
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    initAuth().finally(() => setInitialized(true))
-  }, [])
+    initAuth().finally(() => setInitialized(true));
+  }, []);
 
   if (!initialized) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-100">
-        <div className="text-gray-500">加载中...⏳</div>
+        <div className="text-gray-500">加载中...</div>
       </div>
-    )
+    );
   }
 
-  return <>{children}</>
+  return <>{children}</>;
 }
 
 function App() {
@@ -133,7 +101,7 @@ function App() {
         </Routes>
       </AppInitializer>
     </BrowserRouter>
-  )
+  );
 }
 
-export default App
+export default App;
