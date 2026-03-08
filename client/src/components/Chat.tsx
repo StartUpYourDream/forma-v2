@@ -2,6 +2,16 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Send, FolderOpen, MoreHorizontal } from "lucide-react";
 import { useStore } from "../store";
 
+function filterMembers(members: any[], query: string) {
+  return members
+    .filter(
+      (m) =>
+        m.name.toLowerCase().includes(query.toLowerCase()) ||
+        m.type === "agent",
+    )
+    .slice(0, 5);
+}
+
 interface MentionDropdownProps {
   members: any[];
   query: string;
@@ -15,13 +25,7 @@ function MentionDropdown({
   onSelect,
   position,
 }: MentionDropdownProps) {
-  const filtered = members
-    .filter(
-      (m) =>
-        m.name.toLowerCase().includes(query.toLowerCase()) ||
-        m.type === "agent",
-    )
-    .slice(0, 5);
+  const filtered = filterMembers(members, query);
 
   if (filtered.length === 0) return null;
 
@@ -189,14 +193,7 @@ export default function Chat() {
         return;
       }
       if (e.key === "Enter" && !e.shiftKey) {
-        // 在下拉框打开时，Enter选择第一个
-        const filtered = members
-          .filter(
-            (m) =>
-              m.name.toLowerCase().includes(mentionQuery.toLowerCase()) ||
-              m.type === "agent",
-          )
-          .slice(0, 5);
+        const filtered = filterMembers(members, mentionQuery);
         if (filtered.length > 0) {
           e.preventDefault();
           handleMentionSelect(filtered[0]);

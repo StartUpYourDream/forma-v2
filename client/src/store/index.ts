@@ -1,6 +1,5 @@
 import { create } from "zustand";
 
-// ============ Types ============
 interface User {
   id: string;
   name: string;
@@ -49,20 +48,17 @@ interface StreamingMessage {
   content: string;
 }
 
-// 认证响应类型
 interface AuthResponse {
   success: boolean;
   error?: string;
 }
 
-// ============ Store Interface ============
 interface Store {
   // 认证状态
   isAuthenticated: boolean;
   accessToken: string | null;
   refreshToken: string | null;
-  tokenExpiresAt: number | null;
-  
+
   // 应用状态
   currentUser: User | null;
   currentTeam: string | null;
@@ -76,11 +72,16 @@ interface Store {
   showFileBrowser: boolean;
 
   // 认证方法
+  initAuth: () => Promise<void>;
   login: (email: string, password: string) => Promise<AuthResponse>;
-  register: (name: string, email: string, password: string) => Promise<AuthResponse>;
+  register: (
+    name: string,
+    email: string,
+    password: string,
+  ) => Promise<AuthResponse>;
   logout: () => Promise<void>;
   refreshAccessToken: () => Promise<boolean>;
-  
+
   // 应用方法
   setCurrentUser: (user: User) => void;
   setCurrentTeam: (teamId: string) => Promise<void>;
@@ -97,17 +98,63 @@ interface Store {
   updateMemberStatus: (memberId: string, status: string) => void;
 }
 
-// ============ Constants ============
 const WS_MAX_RETRIES = 10;
 const WS_BASE_DELAY = 1000;
-
-// 本地存储 key
-const STORAGE_KEY = 'forma_auth';
+const STORAGE_KEY = "forma_auth";
 
 export const useStore = create<Store>((set, get) => {
   let wsRetryCount = 0;
 
+  // 带 Authorization header 的 fetch
+  const authFetch = (url: string, options: RequestInit = {}) => {
+    const { accessToken } = get();
+    const headers = new Headers(options.headers);
+    if (accessToken) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+    }
+    return fetch(url, { ...options, headers });
+  };
+
+  const authPost = (url: string, body: unknown) =>
+    authFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+  // 保存/清除 token 到 localStorage
+  const persistTokens = (accessToken: string, refreshToken: string) => {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ accessToken, refreshToken }),
+    );
+  };
+  const clearTokens = () => localStorage.removeItem(STORAGE_KEY);
+
+  // 登录成功后的共享流程
+  const onAuthSuccess = async (data: {
+    user: User;
+    accessToken: string;
+    refreshToken: string;
+  }) => {
+    persistTokens(data.accessToken, data.refreshToken);
+    set({
+      accessToken: data.accessToken,
+      refreshToken: data.refreshToken,
+      currentUser: data.user,
+      isAuthenticated: true,
+    });
+    get().connectWebSocket(data.user.id);
+    await get().loadTeams();
+  };
+
   return {
+    // 认证状态
+    isAuthenticated: false,
+    accessToken: null,
+    refreshToken: null,
+
+    // 应用状态
     currentUser: null,
     currentTeam: null,
     currentProject: null,
@@ -119,11 +166,127 @@ export const useStore = create<Store>((set, get) => {
     ws: null,
     showFileBrowser: false,
 
-    setCurrentUser: (user) => set({ currentUser: user }),
+    // === 认证方法 ===
 
+    initAuth: async () => {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (!stored) return;
+
+      try {
+        const { accessToken, refreshToken } = JSON.parse(stored);
+        set({ accessToken, refreshToken });
+
+        const res = await fetch("/api/me", {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+
+        if (res.ok) {
+          const user = await res.json();
+          set({ currentUser: user, isAuthenticated: true });
+          get().connectWebSocket(user.id);
+          await get().loadTeams();
+        } else if (res.status === 401 && refreshToken) {
+          const refreshed = await get().refreshAccessToken();
+          if (refreshed) {
+            // 重试 with new token
+            const retryRes = await authFetch("/api/me");
+            if (retryRes.ok) {
+              const user = await retryRes.json();
+              set({ currentUser: user, isAuthenticated: true });
+              get().connectWebSocket(user.id);
+              await get().loadTeams();
+            }
+          }
+        }
+      } catch {
+        clearTokens();
+      }
+    },
+
+    login: async (email, password) => {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error };
+
+      await onAuthSuccess(data);
+      return { success: true };
+    },
+
+    register: async (name, email, password) => {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) return { success: false, error: data.error };
+
+      await onAuthSuccess(data);
+      return { success: true };
+    },
+
+    logout: async () => {
+      const { refreshToken, ws } = get();
+      try {
+        await fetch("/api/auth/logout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refreshToken }),
+        });
+      } catch {
+        // 忽略网络错误，仍然清除本地状态
+      }
+      if (ws) ws.close();
+      clearTokens();
+      set({
+        isAuthenticated: false,
+        accessToken: null,
+        refreshToken: null,
+        currentUser: null,
+        currentTeam: null,
+        currentProject: null,
+        teams: [],
+        projects: [],
+        members: [],
+        messages: [],
+        streamingMessages: new Map(),
+        ws: null,
+      });
+    },
+
+    refreshAccessToken: async () => {
+      const { refreshToken } = get();
+      if (!refreshToken) return false;
+
+      try {
+        const res = await fetch("/api/auth/refresh", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refreshToken }),
+        });
+        if (!res.ok) return false;
+
+        const data = await res.json();
+        persistTokens(data.accessToken, data.refreshToken);
+        set({
+          accessToken: data.accessToken,
+          refreshToken: data.refreshToken,
+        });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+
+    // === 应用方法 ===
+
+    setCurrentUser: (user) => set({ currentUser: user }),
     setShowFileBrowser: (show) => set({ showFileBrowser: show }),
 
-    // [问题2] 修复 race condition：loadProjects 返回值直接使用
     setCurrentTeam: async (teamId) => {
       const { ws, currentProject } = get();
 
@@ -144,7 +307,6 @@ export const useStore = create<Store>((set, get) => {
         const projects = await get().loadProjects(teamId);
         await get().loadMembers(teamId);
 
-        // 直接使用返回值，避免 stale state
         if (projects.length > 0) {
           await get().setCurrentProject(projects[0].id);
         }
@@ -174,7 +336,7 @@ export const useStore = create<Store>((set, get) => {
     },
 
     loadTeams: async () => {
-      const res = await fetch("/api/teams");
+      const res = await authFetch("/api/teams");
       const teams = await res.json();
       set({ teams });
 
@@ -183,9 +345,8 @@ export const useStore = create<Store>((set, get) => {
       }
     },
 
-    // [问题2] 返回加载的 projects，让调用者可以直接使用
     loadProjects: async (teamId) => {
-      const res = await fetch(`/api/teams/${teamId}/projects`);
+      const res = await authFetch(`/api/teams/${teamId}/projects`);
       const projects = await res.json();
       set({ projects });
       return projects;
@@ -195,25 +356,23 @@ export const useStore = create<Store>((set, get) => {
       const { currentTeam, loadProjects, setCurrentProject } = get();
       if (!currentTeam) return;
 
-      const res = await fetch(`/api/teams/${currentTeam}/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, description }),
+      const res = await authPost(`/api/teams/${currentTeam}/projects`, {
+        name,
+        description,
       });
-
       const project = await res.json();
       await loadProjects(currentTeam);
       setCurrentProject(project.id);
     },
 
     loadMembers: async (teamId) => {
-      const res = await fetch(`/api/teams/${teamId}/members`);
+      const res = await authFetch(`/api/teams/${teamId}/members`);
       const members = await res.json();
       set({ members });
     },
 
     loadMessages: async (projectId) => {
-      const res = await fetch(`/api/projects/${projectId}/messages`);
+      const res = await authFetch(`/api/projects/${projectId}/messages`);
       const messages = await res.json();
       set({ messages });
     },
@@ -222,15 +381,12 @@ export const useStore = create<Store>((set, get) => {
       const { currentProject } = get();
       if (!currentProject) return;
 
-      await fetch(`/api/projects/${currentProject}/messages`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, mentions }),
+      await authPost(`/api/projects/${currentProject}/messages`, {
+        content,
+        mentions,
       });
     },
 
-    // [问题1] 动态选择 ws/wss 协议
-    // [问题11] 指数退避 + 最大重试次数
     connectWebSocket: (userId) => {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
@@ -264,15 +420,16 @@ export const useStore = create<Store>((set, get) => {
             break;
           }
           case "agent_stream": {
-            const next = new Map(get().streamingMessages);
-            const existing = next.get(data.agentId);
+            const prev = get().streamingMessages;
+            const existing = prev.get(data.agentId);
             if (existing) {
+              const next = new Map(prev);
               next.set(data.agentId, {
-                ...existing,
+                agentId: data.agentId,
                 content: existing.content + data.content,
               });
+              set({ streamingMessages: next });
             }
-            set({ streamingMessages: next });
             break;
           }
           case "agent_stream_end": {
