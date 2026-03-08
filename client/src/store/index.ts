@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+// ============ Types ============
 interface User {
   id: string;
   name: string;
@@ -48,7 +49,21 @@ interface StreamingMessage {
   content: string;
 }
 
+// 认证响应类型
+interface AuthResponse {
+  success: boolean;
+  error?: string;
+}
+
+// ============ Store Interface ============
 interface Store {
+  // 认证状态
+  isAuthenticated: boolean;
+  accessToken: string | null;
+  refreshToken: string | null;
+  tokenExpiresAt: number | null;
+  
+  // 应用状态
   currentUser: User | null;
   currentTeam: string | null;
   currentProject: string | null;
@@ -60,6 +75,13 @@ interface Store {
   ws: WebSocket | null;
   showFileBrowser: boolean;
 
+  // 认证方法
+  login: (email: string, password: string) => Promise<AuthResponse>;
+  register: (name: string, email: string, password: string) => Promise<AuthResponse>;
+  logout: () => Promise<void>;
+  refreshAccessToken: () => Promise<boolean>;
+  
+  // 应用方法
   setCurrentUser: (user: User) => void;
   setCurrentTeam: (teamId: string) => Promise<void>;
   setCurrentProject: (projectId: string | null) => void;
@@ -75,9 +97,12 @@ interface Store {
   updateMemberStatus: (memberId: string, status: string) => void;
 }
 
-// [问题11] WebSocket 重连：指数退避 + 最大重试次数
+// ============ Constants ============
 const WS_MAX_RETRIES = 10;
 const WS_BASE_DELAY = 1000;
+
+// 本地存储 key
+const STORAGE_KEY = 'forma_auth';
 
 export const useStore = create<Store>((set, get) => {
   let wsRetryCount = 0;

@@ -27,8 +27,20 @@ export default class FormaDB {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         email TEXT UNIQUE NOT NULL,
+        password TEXT,                    -- 密码哈希（可为空，支持OAuth用户）
         avatar TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Refresh Tokens
+      CREATE TABLE IF NOT EXISTS refresh_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        token TEXT NOT NULL,
+        expires_at DATETIME NOT NULL,
+        revoked INTEGER DEFAULT 0,        -- 0 = 有效, 1 = 已撤销
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       );
 
       -- Teams
@@ -167,6 +179,8 @@ export default class FormaDB {
       CREATE INDEX IF NOT EXISTS idx_executions_project ON agent_executions(project_id);
       CREATE INDEX IF NOT EXISTS idx_executions_status ON agent_executions(status);
       CREATE INDEX IF NOT EXISTS idx_logs_execution ON agent_execution_logs(execution_id);
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
+      CREATE INDEX IF NOT EXISTS idx_refresh_tokens_token ON refresh_tokens(token);
     `);
   }
 
